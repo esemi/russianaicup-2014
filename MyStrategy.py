@@ -9,6 +9,11 @@ from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
 
 
+DISTANCE_LIMIT_TO_GOAL_SECTOR = 80.
+NET_COORD_FACTOR_X = 2
+NET_COORD_FACTOR_Y = 20
+
+
 def log_it(msg, level='info'):
     getattr(logging, level)(msg)
 
@@ -32,6 +37,11 @@ class MyStrategy:
         """
         log_it('new move turn %d unit %d (%s)' % (world.tick, me.teammate_index, str((me.x, me.y))))
 
+        # todo выводить хокеиста из замаха если он уже без шайбы
+
+        if me.state == HockeyistState.KNOCKED_DOWN:
+            log_it('knocked down state')
+
         puck = world.puck
         my_player = world.get_my_player()
 
@@ -42,24 +52,48 @@ class MyStrategy:
         else:
             # иначе (шайба у наших) игроки пропываются к одному из головых кругов
             if puck.owner_hockeyist_id == me.id:
-                # ходит нападающий
-                self._action_forward(me, move)
+                self._action_forward(me, move, world)
             else:
-                # ходит защитник
                 self._action_defender(me, move, world, game)
-                pass
 
-    def _action_forward(self, me, move):
+    def _action_forward(self, me, move, world):
         """
         _action_forward(Hockeyist, Move)
 
         """
         log_it("forward action started")
-        pass
+        sector_coord = self.select_goal_sector(me, world)
+        log_it("sector coord %s" % str(sector_coord))
+        strike_coord = self.select_strike_coord(me, world)
+        log_it("strike coord %s" % str(strike_coord))
+
+        # todo начинаем поворачиваться раньше, чем достигли голевого сектора
+        if me.get_distance_to(*sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
+            # если атакер уже может бить - процессим удар по воротам
+            log_it('process strike to enemy net')
+
+            # todo оттормаживаемся в голевом секторе
+            # todo замахиваемся пока враги далеко (но не более лимита и не менее офсета на замах)
+
+            # поворачиваемся к воротам или лупим по ним
+            strike_angle = me.get_angle_to(*strike_coord)
+            log_it('strike angle %.3f' % strike_angle)
+            if abs(strike_angle) <= 0.01:
+                # todo замах перед ударом
+                log_it("strike puck %.2f" % strike_angle)
+                move.action = ActionType.STRIKE
+            else:
+                move.turn = strike_angle
+
+        else:
+            # иначе ведём атакера на рубеж атаки
+            log_it("run and turn to goal sector")
+            move.speed_up = 1.0
+            move.turn = me.get_angle_to(*sector_coord)
 
     def _action_defender(self, me, move, world, game):
         """
-        _action_defender(Hockeyist, Move, World)
+        _action_defender(Hockeyist, Move, World, Game)
 
         """
         # дефендер движется к ближайшему сопернику и пиздит его
@@ -67,11 +101,13 @@ class MyStrategy:
         enemys = self.get_enemys(me, world)
 
         # если один из ближайших противников в зоне досягаемости и не опрокинут - пиздим его клюшкой
-        for enemy in enemys:
-            if self.unit_in_action_range(me, enemy, game) and enemy.state != HockeyistState.KNOCKED_DOWN:
-                log_it("strike enemy %d" % enemy.id)
-                move.action = ActionType.STRIKE
-                break
+        if me.remaining_cooldown_ticks == 0:
+            for enemy in enemys:
+                if self.unit_in_action_range(me, enemy, game) and enemy.state != HockeyistState.KNOCKED_DOWN:
+                    log_it("strike enemy %d" % enemy.id)
+                    # todo пиздить только если шайба не у нас и в секторе досягаемости
+                    move.action = ActionType.STRIKE
+                    break
 
         # двигаем к нему
         log_it("run and turn to enemy for battle")
@@ -90,7 +126,7 @@ class MyStrategy:
 
         # todo пиздить противников по пути к шайбе
         # todo не обгонять шайбу
-        if self.unit_in_action_range(me, puck, game):
+        if self.unit_in_action_range(me, puck, game) and me.remaining_cooldown_ticks == 0:
             # хватаем шайбу
             log_it("take puck")
             move.action = ActionType.TAKE_PUCK
@@ -112,3 +148,87 @@ class MyStrategy:
     def unit_in_action_range(unit_from, unit_to, game):
         return unit_from.get_distance_to_unit(unit_to) <= game.stick_length and \
                unit_from.get_angle_to_unit(unit_to) <= (game.stick_sector / 2)
+
+    @staticmethod
+    def select_goal_sector(me, world):
+        log_it("select goal sector")
+        # todo RELEASE MATH
+
+        op_player = world.get_opponent_player()
+
+        sector_top_top_y = 0.
+        sector_top_bottom_y = op_player.net_top
+        sector_bottom_top_y = op_player.net_bottom
+        sector_bottom_bottom_y = world.height
+
+        if op_player.net_front > op_player.net_back:
+            log_it("left side enemy")
+            # top sector
+            sector_top_left_x = world.width / 4
+            sector_top_right_x = world.width / 2
+
+            # bottom sector
+            sector_bottom_left_x = world.width / 4
+            sector_bottom_right_x = world.width / 2
+        else:
+            log_it("right side enemy")
+            # top sector
+            sector_top_left_x = world.width / 2
+            sector_top_right_x = world.width - (world.width / 4)
+
+            # bottom sector
+            sector_bottom_left_x = world.width / 2
+            sector_bottom_right_x = world.width - (world.width / 4)
+
+        # считаем координаты центров голового секторов
+        top_sector_center_coord = ((sector_top_right_x + sector_top_left_x) / 2,
+                                   (sector_top_bottom_y + sector_top_top_y) / 2)
+        bottom_sector_center_coord = ((sector_bottom_right_x + sector_bottom_left_x) / 2,
+                                      (sector_bottom_top_y + sector_bottom_bottom_y) / 2)
+
+        log_it('top goal sector (%s, %s, %s, %s, %s)' % (sector_top_top_y, sector_top_bottom_y, sector_top_left_x,
+                                                         sector_top_right_x, str(top_sector_center_coord)))
+        log_it('bottom goal sector (%s, %s, %s, %s, %s)' % (sector_bottom_top_y, sector_bottom_bottom_y,
+                                                            sector_bottom_left_x, sector_bottom_right_x,
+                                                            str(bottom_sector_center_coord)))
+
+        top_sector_distance = me.get_distance_to(*top_sector_center_coord)
+        log_it("distance ot top sector center %.2f" % top_sector_distance)
+
+        bottom_sector_distance = me.get_distance_to(*bottom_sector_center_coord)
+        log_it("distance ot bottom sector center %.2f" % bottom_sector_distance)
+
+        if top_sector_distance < bottom_sector_distance:
+            return top_sector_center_coord
+        else:
+            return bottom_sector_center_coord
+
+    @staticmethod
+    def select_strike_coord(me, world):
+        log_it("select strike coord")
+
+        op_player = world.get_opponent_player()
+
+        top_coord_y = op_player.net_top + NET_COORD_FACTOR_Y
+        bottom_coord_y = op_player.net_bottom - NET_COORD_FACTOR_Y
+        if op_player.net_front > op_player.net_back:
+            bottom_coord_x = top_coord_x = op_player.net_front - NET_COORD_FACTOR_X
+        else:
+            bottom_coord_x = top_coord_x = op_player.net_front + NET_COORD_FACTOR_X
+        top_coord = (top_coord_x, top_coord_y)
+        bottom_coord = (bottom_coord_x, bottom_coord_y)
+
+        log_it('top strike coord (%s, %s)' % (str((op_player.net_top, op_player.net_bottom, op_player.net_front)),
+                                              str(top_coord)))
+        log_it('bottom strike coord (%s, %s)' % (str((op_player.net_top, op_player.net_bottom, op_player.net_front)),
+                                                 str(bottom_coord)))
+
+        top_distance = me.get_distance_to(*top_coord)
+        log_it("distance ot top strike coord %.2f" % top_distance)
+        bottom_distance = me.get_distance_to(*bottom_coord)
+        log_it("distance ot bottom strike coord %.2f" % bottom_distance)
+
+        if top_distance < bottom_distance:
+            return bottom_coord
+        else:
+            return top_coord
