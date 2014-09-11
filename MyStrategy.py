@@ -11,11 +11,11 @@ from model.ActionType import ActionType
 
 
 GOAL_SECTOR_RINK_PADDING = 8
-DISTANCE_LIMIT_TO_GOAL_SECTOR = 80.
+DISTANCE_LIMIT_TO_GOAL_SECTOR = 90.
 NET_COORD_FACTOR_X = 4
 NET_COORD_FACTOR_Y = 15
 STRIKE_ANGLE_LIMIT = 0.01
-STRIKE_SPEED_LIMIT = 1.
+STRIKE_SPEED_LIMIT = 1.5
 # todo поиграть с константами
 
 
@@ -76,6 +76,8 @@ class MyStrategy:
         strike_coord = self.select_strike_coord(me, world)
         log_it("strike coord %s" % str(strike_coord))
 
+        # TODO учёт пропажи вратаря в овертайме
+
         # todo начинаем поворачиваться раньше, чем достигли голевого сектора
         if me.get_distance_to(*sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
             # если атакер уже может бить - процессим удар по воротам
@@ -111,21 +113,20 @@ class MyStrategy:
         """
         # дефендер движется к ближайшему сопернику и пиздит его
         log_it("defender action started")
-        enemys = self.get_enemys(me, world)
 
-        # если один из ближайших противников в зоне досягаемости и не опрокинут - пиздим его клюшкой
-        if me.remaining_cooldown_ticks == 0:
-            for enemy in enemys:
-                if self.unit_in_action_range(me, enemy, game) and enemy.state != HockeyistState.KNOCKED_DOWN:
-                    log_it("strike enemy %d" % enemy.id)
-                    # todo пиздить только если шайба не у нас и в секторе досягаемости
-                    move.action = ActionType.STRIKE
-                    break
+        enemys = self.get_enemys(me, world)
 
         # двигаем к нему
         log_it("run and turn to enemy for battle")
         move.speed_up = 1.0
         move.turn = me.get_angle_to_unit(enemys[0])
+
+        if me.state == HockeyistState.SWINGING:
+            log_it('cancel strike (swinging state)')
+            move.action = ActionType.CANCEL_STRIKE
+        elif me.remaining_cooldown_ticks == 0:
+            # если один из ближайших противников в зоне досягаемости и не опрокинут - пиздим его клюшкой
+            self._enemy_strike(me, world, game, move)
 
     def _action_puck_hunt(self, me, puck, game, move, world):
         log_it("puck hanting started")
@@ -148,19 +149,33 @@ class MyStrategy:
                 log_it("take puck")
                 move.action = ActionType.TAKE_PUCK
             else:
-                # не заденем ли мы ударом своего коллегу
-                teamates_in_action_range = [i for i in self.get_teamates(me, world)
-                                            if self.unit_in_action_range(me, i, game)]
-                if len(teamates_in_action_range):
-                    log_it('stop strike - teamate on action range')
-                else:
-                    enemys = [i for i in self.get_enemys(me, world)
-                              if self.unit_in_action_range(me, i, game) and i.state != HockeyistState.KNOCKED_DOWN]
-                    for enemy in enemys:
-                        log_it("strike enemy %d" % enemy.id)
-                        move.action = ActionType.STRIKE
-                        break
+                # пиздим врагов только если не заденем шайбу (нашу) и наших сокомандников
+                self._enemy_strike(me, world, game, move)
 
+    def _enemy_strike(self, me, world, game, move):
+        log_it('strike enemy')
+        # не заденем ли мы ударом своего коллегу
+        teammates_in_action_range = [i for i in self.get_teammates(me, world) if self.unit_in_action_range(me, i, game)]
+        if len(teammates_in_action_range):
+            log_it('stop strike - teammate on action range')
+            return False
+
+        # не заденем ли нашу шайбу
+        puck = world.puck
+        my_player = world.get_my_player()
+        if puck.owner_player_id == my_player.id and self.unit_in_action_range(me, puck, game):
+            log_it('stop strike - teammate on action range')
+            return False
+
+        enemys = [i for i in self.get_enemys(me, world)
+                  if self.unit_in_action_range(me, i, game) and i.state != HockeyistState.KNOCKED_DOWN]
+        if len(enemys):
+            log_it("strike enemy %d" % enemys[0].id)
+            move.action = ActionType.STRIKE
+            return True
+        else:
+            log_it("enemy not found in action range")
+            return False
 
     @staticmethod
     def get_enemys(me, world):
@@ -170,18 +185,19 @@ class MyStrategy:
         return [i[0] for i in enemys]
 
     @staticmethod
-    def get_teamates(me, world):
+    def get_teammates(me, world):
         return [i for i in world.hockeyists if i.teammate and i.type != HockeyistType.GOALIE and i.id != me.id]
 
     @staticmethod
     def unit_in_action_range(unit_from, unit_to, game):
-        return unit_from.get_distance_to_unit(unit_to) <= game.stick_length and \
-               unit_from.get_angle_to_unit(unit_to) <= (game.stick_sector / 2)
+        return unit_from.get_distance_to_unit(unit_to) <= game.stick_length \
+            and unit_from.get_angle_to_unit(unit_to) <= (game.stick_sector / 2)
 
     @staticmethod
     def select_goal_sector(me, op_player, game):
         log_it("select goal sector")
         # todo RELEASE MATH
+        # todo долой константы - поле расширят к хуям!!!
         # todo уклоняться от встреч с врагами
 
         sector_top_top_y = game.rink_top + GOAL_SECTOR_RINK_PADDING
@@ -234,7 +250,6 @@ class MyStrategy:
             return choice([bottom_sector_center_coord, top_sector_center_coord])
         else:
             return bottom_sector_center_coord
-
 
     @staticmethod
     def select_strike_coord(me, world):
