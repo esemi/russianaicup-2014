@@ -3,17 +3,20 @@
 
 from math import sqrt
 import logging
+from random import choice
 
 from model.HockeyistState import HockeyistState
 from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
 
 
+GOAL_SECTOR_RINK_PADDING = 8
 DISTANCE_LIMIT_TO_GOAL_SECTOR = 80.
-NET_COORD_FACTOR_X = 2
-NET_COORD_FACTOR_Y = 20
+NET_COORD_FACTOR_X = 4
+NET_COORD_FACTOR_Y = 15
 STRIKE_ANGLE_LIMIT = 0.01
-STRIKE_SPEED_LIMIT = 2.
+STRIKE_SPEED_LIMIT = 1.
+# todo поиграть с константами
 
 
 def log_it(msg, level='info'):
@@ -54,17 +57,19 @@ class MyStrategy:
         else:
             # иначе (шайба у наших) игроки пропываются к одному из головых кругов
             if puck.owner_hockeyist_id == me.id:
-                self._action_forward(me, move, world)
+                self._action_forward(me, move, world, game)
             else:
                 self._action_defender(me, move, world, game)
 
-    def _action_forward(self, me, move, world):
+    def _action_forward(self, me, move, world, game):
         """
         _action_forward(Hockeyist, Move)
 
         """
         log_it("forward action started")
-        sector_coord = self.select_goal_sector(me, world)
+        op_player = world.get_opponent_player()
+
+        sector_coord = self.select_goal_sector(me, op_player, game)
         log_it("sector coord %s" % str(sector_coord))
         strike_coord = self.select_strike_coord(me, world)
         log_it("strike coord %s" % str(strike_coord))
@@ -84,14 +89,13 @@ class MyStrategy:
 
             # поворачиваемся к воротам или лупим по ним
             strike_angle = me.get_angle_to(*strike_coord)
-            log_it('strike angle %.3f' % strike_angle)
             if abs(strike_angle) <= STRIKE_ANGLE_LIMIT:
                 # todo замах перед ударом
                 log_it("strike puck %.2f" % strike_angle)
                 move.action = ActionType.STRIKE
             else:
+                log_it("only turn %.2f" % strike_angle)
                 move.turn = strike_angle
-
         else:
             # иначе ведём атакера на рубеж атаки
             log_it("run and turn to goal sector")
@@ -131,8 +135,7 @@ class MyStrategy:
         log_it("distance to puck %0.2f (min %0.2f)" % (me.get_distance_to_unit(puck), game.stick_length))
         log_it("angle to puck %0.2f (min %0.2f)" % (me.get_angle_to_unit(puck), (game.stick_sector / 2)))
 
-        # todo пиздить противников по пути к шайбе
-        # todo не обгонять шайбу
+        # todo идти на защиту ворот (или перед ведущим шайбу хокеистом) если шайба на нашей половине и у врагов
         if self.unit_in_action_range(me, puck, game) and me.remaining_cooldown_ticks == 0:
             # хватаем шайбу
             log_it("take puck")
@@ -143,6 +146,7 @@ class MyStrategy:
             log_it("run and turn to puck")
             move.speed_up = 1.0
             move.turn = me.get_angle_to_unit(puck)
+            # todo пиздить противников по пути к шайбе
 
     @staticmethod
     def get_enemys(me, world):
@@ -157,35 +161,36 @@ class MyStrategy:
                unit_from.get_angle_to_unit(unit_to) <= (game.stick_sector / 2)
 
     @staticmethod
-    def select_goal_sector(me, world):
+    def select_goal_sector(me, op_player, game):
         log_it("select goal sector")
         # todo RELEASE MATH
+        # todo уклоняться от встреч с врагами
 
-        op_player = world.get_opponent_player()
-
-        sector_top_top_y = 0.
+        sector_top_top_y = game.rink_top + GOAL_SECTOR_RINK_PADDING
         sector_top_bottom_y = op_player.net_top
         sector_bottom_top_y = op_player.net_bottom
-        sector_bottom_bottom_y = world.height
+        sector_bottom_bottom_y = game.rink_bottom - GOAL_SECTOR_RINK_PADDING
+
+        rink_width = game.rink_right - game.rink_left
 
         if op_player.net_front > op_player.net_back:
             log_it("left side enemy")
             # top sector
-            sector_top_left_x = world.width / 4
-            sector_top_right_x = world.width / 2
+            sector_top_left_x = rink_width / 4
+            sector_top_right_x = rink_width / 2
 
             # bottom sector
-            sector_bottom_left_x = world.width / 4
-            sector_bottom_right_x = world.width / 2
+            sector_bottom_left_x = rink_width / 4
+            sector_bottom_right_x = rink_width / 2
         else:
             log_it("right side enemy")
             # top sector
-            sector_top_left_x = world.width / 2
-            sector_top_right_x = world.width - (world.width / 4)
+            sector_top_left_x = rink_width / 2
+            sector_top_right_x = rink_width - (rink_width / 4)
 
             # bottom sector
-            sector_bottom_left_x = world.width / 2
-            sector_bottom_right_x = world.width - (world.width / 4)
+            sector_bottom_left_x = rink_width / 2
+            sector_bottom_right_x = rink_width - (rink_width / 4)
 
         # считаем координаты центров голового секторов
         top_sector_center_coord = ((sector_top_right_x + sector_top_left_x) / 2,
@@ -207,8 +212,11 @@ class MyStrategy:
 
         if top_sector_distance < bottom_sector_distance:
             return top_sector_center_coord
+        elif top_sector_distance == bottom_sector_distance:
+            return choice([bottom_sector_center_coord, top_sector_center_coord])
         else:
             return bottom_sector_center_coord
+
 
     @staticmethod
     def select_strike_coord(me, world):
