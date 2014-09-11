@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
-
+from math import sqrt
 import logging
 
 from model.HockeyistState import HockeyistState
@@ -12,6 +12,8 @@ from model.ActionType import ActionType
 DISTANCE_LIMIT_TO_GOAL_SECTOR = 80.
 NET_COORD_FACTOR_X = 2
 NET_COORD_FACTOR_Y = 20
+STRIKE_ANGLE_LIMIT = 0.01
+STRIKE_SPEED_LIMIT = 2.
 
 
 def log_it(msg, level='info'):
@@ -72,13 +74,18 @@ class MyStrategy:
             # если атакер уже может бить - процессим удар по воротам
             log_it('process strike to enemy net')
 
-            # todo оттормаживаемся в голевом секторе
+            # оттормаживаемся в голевом секторе
+            cur_speed = self.speed_abs(me)
+            if cur_speed > STRIKE_SPEED_LIMIT:
+                log_it('speed %.2f - rear turn' % cur_speed)
+                move.speed_up = -1.0
+
             # todo замахиваемся пока враги далеко (но не более лимита и не менее офсета на замах)
 
             # поворачиваемся к воротам или лупим по ним
             strike_angle = me.get_angle_to(*strike_coord)
             log_it('strike angle %.3f' % strike_angle)
-            if abs(strike_angle) <= 0.01:
+            if abs(strike_angle) <= STRIKE_ANGLE_LIMIT:
                 # todo замах перед ударом
                 log_it("strike puck %.2f" % strike_angle)
                 move.action = ActionType.STRIKE
@@ -232,3 +239,7 @@ class MyStrategy:
             return bottom_coord
         else:
             return top_coord
+
+    @staticmethod
+    def speed_abs(unit):
+        return sqrt(unit.speed_x ** 2 + unit.speed_y ** 2)
