@@ -42,10 +42,12 @@ class MyStrategy:
         """
         log_it('new move turn %d unit %d (%s)' % (world.tick, me.teammate_index, str((me.x, me.y))))
 
-        # todo выводить хокеиста из замаха если он уже без шайбы
-
         if me.state == HockeyistState.KNOCKED_DOWN:
-            log_it('knocked down state')
+            log_it('knocked down state ignore', 'warn')
+            return
+        elif me.state == HockeyistState.RESTING:
+            log_it('resting state ignore', 'warn')
+            return
 
         puck = world.puck
         my_player = world.get_my_player()
@@ -53,7 +55,7 @@ class MyStrategy:
         log_it("puck player id %d (me %d)" % (puck.owner_player_id, my_player.id))
         if puck.owner_player_id != my_player.id:
             # если шайба не у нас - все игроки несутся её захватывать
-            self._action_puck_hunt(me, puck, game, move)
+            self._action_puck_hunt(me, puck, game, move, world)
         else:
             # иначе (шайба у наших) игроки пропываются к одному из головых кругов
             if puck.owner_hockeyist_id == me.id:
@@ -125,28 +127,40 @@ class MyStrategy:
         move.speed_up = 1.0
         move.turn = me.get_angle_to_unit(enemys[0])
 
-    def _action_puck_hunt(self, me, puck, game, move):
-        """
-        _action_base(Hockeyist, Puck, Game, Move)
-
-        """
-
+    def _action_puck_hunt(self, me, puck, game, move, world):
         log_it("puck hanting started")
         log_it("distance to puck %0.2f (min %0.2f)" % (me.get_distance_to_unit(puck), game.stick_length))
         log_it("angle to puck %0.2f (min %0.2f)" % (me.get_angle_to_unit(puck), (game.stick_sector / 2)))
 
         # todo идти на защиту ворот (или перед ведущим шайбу хокеистом) если шайба на нашей половине и у врагов
-        if self.unit_in_action_range(me, puck, game) and me.remaining_cooldown_ticks == 0:
-            # хватаем шайбу
-            log_it("take puck")
-            move.action = ActionType.TAKE_PUCK
-        else:
-            # если шайба ещё далеко - двигаемся к ней
-            # если шайба в зоне досягаемости, но угол не тот - вертимся
-            log_it("run and turn to puck")
-            move.speed_up = 1.0
-            move.turn = me.get_angle_to_unit(puck)
-            # todo пиздить противников по пути к шайбе
+
+        # двигаем и вертимся за шайбой
+        move.speed_up = 1.0
+        move.turn = me.get_angle_to_unit(puck)
+
+        if me.state == HockeyistState.SWINGING:
+            log_it('cancel strike (swinging state)')
+            move.action = ActionType.CANCEL_STRIKE
+        elif me.remaining_cooldown_ticks == 0:
+            # todo agressive mode for our rink side
+            if self.unit_in_action_range(me, puck, game):
+                # хватаем шайбу
+                log_it("take puck")
+                move.action = ActionType.TAKE_PUCK
+            else:
+                # не заденем ли мы ударом своего коллегу
+                teamates_in_action_range = [i for i in self.get_teamates(me, world)
+                                            if self.unit_in_action_range(me, i, game)]
+                if len(teamates_in_action_range):
+                    log_it('stop strike - teamate on action range')
+                else:
+                    enemys = [i for i in self.get_enemys(me, world)
+                              if self.unit_in_action_range(me, i, game) and i.state != HockeyistState.KNOCKED_DOWN]
+                    for enemy in enemys:
+                        log_it("strike enemy %d" % enemy.id)
+                        move.action = ActionType.STRIKE
+                        break
+
 
     @staticmethod
     def get_enemys(me, world):
@@ -154,6 +168,10 @@ class MyStrategy:
                          if not i.teammate and i.type != HockeyistType.GOALIE],
                         key=lambda x: x[1])
         return [i[0] for i in enemys]
+
+    @staticmethod
+    def get_teamates(me, world):
+        return [i for i in world.hockeyists if i.teammate and i.type != HockeyistType.GOALIE and i.id != me.id]
 
     @staticmethod
     def unit_in_action_range(unit_from, unit_to, game):
