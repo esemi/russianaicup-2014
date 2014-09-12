@@ -10,8 +10,8 @@ from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
 
 
-GOAL_SECTOR_RINK_PADDING = 8
-DISTANCE_LIMIT_TO_GOAL_SECTOR = 85.
+GOAL_SECTOR_PADDING_Y = 0
+DISTANCE_LIMIT_TO_GOAL_SECTOR = 55
 NET_COORD_FACTOR_X = 4
 NET_COORD_FACTOR_Y = 15
 STRIKE_ANGLE_LIMIT = 0.01
@@ -68,15 +68,13 @@ class MyStrategy:
 
         """
         log_it("forward action started")
-        op_player = world.get_opponent_player()
-
-        sector_coord = self.select_goal_sector(me, op_player, game)
+        sector_coord = self.select_goal_sector(me, world, game)
         log_it("sector coord %s" % str(sector_coord))
         strike_coord = self.select_strike_coord(me, world)
         log_it("strike coord %s" % str(strike_coord))
 
         # TODO учёт пропажи вратаря в овертайме
-
+        # todo ведём в голевой сектор центр игрока и шайбы
         # todo начинаем поворачиваться раньше, чем достигли голевого сектора
         if me.get_distance_to(*sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
             # если атакер уже может бить - процессим удар по воротам
@@ -193,49 +191,32 @@ class MyStrategy:
             and unit_from.get_angle_to_unit(unit_to) <= (game.stick_sector / 2)
 
     @staticmethod
-    def select_goal_sector(me, op_player, game):
+    def select_goal_sector(me, world, game):
         log_it("select goal sector")
-        # todo RELEASE MATH
-        # todo долой константы - поле расширят к хуям!!!
-        # todo уклоняться от встреч с врагами
 
-        sector_top_top_y = game.rink_top + GOAL_SECTOR_RINK_PADDING
-        sector_top_bottom_y = op_player.net_top
-        sector_bottom_top_y = op_player.net_bottom
-        sector_bottom_bottom_y = game.rink_bottom - GOAL_SECTOR_RINK_PADDING
+        goalie = [i for i in world.hockeyists if i.type == HockeyistType.GOALIE][0]
+        op_player = world.get_opponent_player()
 
-        rink_width = game.rink_right - game.rink_left
+        rink_center_x = (game.rink_right + game.rink_left) / 2
+        bottom_strike_coord = MyStrategy.get_strike_coord_bottom(world)
+        summary_goalie_r = goalie.radius + world.puck.radius
+        net_katet_b = bottom_strike_coord[1] - op_player.net_top
+        net_katet_a = 2 * ((summary_goalie_r * (net_katet_b - summary_goalie_r)) /
+                           (net_katet_b - 2 * summary_goalie_r))
 
+        top_y = op_player.net_top - GOAL_SECTOR_PADDING_Y
+        bottom_y = op_player.net_bottom + GOAL_SECTOR_PADDING_Y
         if op_player.net_front > op_player.net_back:
             log_it("left side enemy")
-            # top sector
-            sector_top_left_x = rink_width / 4
-            sector_top_right_x = rink_width / 2
-
-            # bottom sector
-            sector_bottom_left_x = rink_width / 4
-            sector_bottom_right_x = rink_width / 2
+            bottom_x = top_x = (op_player.net_front + net_katet_a + rink_center_x) / 2
         else:
             log_it("right side enemy")
-            # top sector
-            sector_top_left_x = rink_width / 2
-            sector_top_right_x = rink_width - (rink_width / 4)
-
-            # bottom sector
-            sector_bottom_left_x = rink_width / 2
-            sector_bottom_right_x = rink_width - (rink_width / 4)
+            bottom_x = top_x = (op_player.net_front - net_katet_a + rink_center_x) / 2
 
         # считаем координаты центров голового секторов
-        top_sector_center_coord = ((sector_top_right_x + sector_top_left_x) / 2,
-                                   (sector_top_bottom_y + sector_top_top_y) / 2)
-        bottom_sector_center_coord = ((sector_bottom_right_x + sector_bottom_left_x) / 2,
-                                      (sector_bottom_top_y + sector_bottom_bottom_y) / 2)
-
-        log_it('top goal sector (%s, %s, %s, %s, %s)' % (sector_top_top_y, sector_top_bottom_y, sector_top_left_x,
-                                                         sector_top_right_x, str(top_sector_center_coord)))
-        log_it('bottom goal sector (%s, %s, %s, %s, %s)' % (sector_bottom_top_y, sector_bottom_bottom_y,
-                                                            sector_bottom_left_x, sector_bottom_right_x,
-                                                            str(bottom_sector_center_coord)))
+        top_sector_center_coord = (top_x, top_y)
+        bottom_sector_center_coord = (bottom_x, bottom_y)
+        log_it('goal sectors center coord (%s) (%s)' % (str(top_sector_center_coord), str(bottom_sector_center_coord)))
 
         top_sector_distance = me.get_distance_to(*top_sector_center_coord)
         log_it("distance ot top sector center %.2f" % top_sector_distance)
@@ -243,6 +224,7 @@ class MyStrategy:
         bottom_sector_distance = me.get_distance_to(*bottom_sector_center_coord)
         log_it("distance ot bottom sector center %.2f" % bottom_sector_distance)
 
+        # todo уклоняться от встреч с врагами
         if top_sector_distance < bottom_sector_distance:
             return top_sector_center_coord
         elif top_sector_distance == bottom_sector_distance:
@@ -251,30 +233,36 @@ class MyStrategy:
             return bottom_sector_center_coord
 
     @staticmethod
-    def select_strike_coord(me, world):
-        log_it("select strike coord")
-
+    def get_strike_coord_top(world):
         op_player = world.get_opponent_player()
-
         top_coord_y = op_player.net_top + NET_COORD_FACTOR_Y
+        if op_player.net_front > op_player.net_back:
+            top_coord_x = op_player.net_front - NET_COORD_FACTOR_X
+        else:
+            top_coord_x = op_player.net_front + NET_COORD_FACTOR_X
+        return top_coord_x, top_coord_y
+
+    @staticmethod
+    def get_strike_coord_bottom(world):
+        op_player = world.get_opponent_player()
         bottom_coord_y = op_player.net_bottom - NET_COORD_FACTOR_Y
         if op_player.net_front > op_player.net_back:
-            bottom_coord_x = top_coord_x = op_player.net_front - NET_COORD_FACTOR_X
+            bottom_coord_x = op_player.net_front - NET_COORD_FACTOR_X
         else:
-            bottom_coord_x = top_coord_x = op_player.net_front + NET_COORD_FACTOR_X
-        top_coord = (top_coord_x, top_coord_y)
-        bottom_coord = (bottom_coord_x, bottom_coord_y)
+            bottom_coord_x = op_player.net_front + NET_COORD_FACTOR_X
+        return bottom_coord_x, bottom_coord_y
 
-        log_it('top strike coord (%s, %s)' % (str((op_player.net_top, op_player.net_bottom, op_player.net_front)),
-                                              str(top_coord)))
-        log_it('bottom strike coord (%s, %s)' % (str((op_player.net_top, op_player.net_bottom, op_player.net_front)),
-                                                 str(bottom_coord)))
-
+    @staticmethod
+    def select_strike_coord(me, world):
+        log_it("select strike coord")
+        top_coord = MyStrategy.get_strike_coord_top(world)
+        bottom_coord = MyStrategy.get_strike_coord_bottom(world)
+        log_it('top strike coord (%s)' % str(top_coord))
+        log_it('bottom strike coord (%s)' % str(bottom_coord))
         top_distance = me.get_distance_to(*top_coord)
         log_it("distance ot top strike coord %.2f" % top_distance)
         bottom_distance = me.get_distance_to(*bottom_coord)
         log_it("distance ot bottom strike coord %.2f" % bottom_distance)
-
         if top_distance < bottom_distance:
             return bottom_coord
         else:
