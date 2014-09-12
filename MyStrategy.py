@@ -11,12 +11,11 @@ from model.ActionType import ActionType
 
 
 GOAL_SECTOR_RINK_PADDING = 8
-DISTANCE_LIMIT_TO_GOAL_SECTOR = 90.
+DISTANCE_LIMIT_TO_GOAL_SECTOR = 85.
 NET_COORD_FACTOR_X = 4
 NET_COORD_FACTOR_Y = 15
 STRIKE_ANGLE_LIMIT = 0.01
-STRIKE_SPEED_LIMIT = 1.5
-# todo поиграть с константами
+STRIKE_SPEED_LIMIT = 1.
 
 
 def log_it(msg, level='info'):
