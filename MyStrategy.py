@@ -10,13 +10,14 @@ from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
 
 
-GOAL_SECTOR_PADDING_Y = 90
-DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD = 70
-DISTANCE_LIMIT_TO_GOAL_SECTOR_SOFT = DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD + 20
+GOAL_SECTOR_PADDING_Y = 80
+DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD = 75
+DISTANCE_LIMIT_TO_GOAL_SECTOR_SOFT = DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD + 15
 NET_COORD_FACTOR_X = 3
 NET_COORD_FACTOR_Y = 20
 STRIKE_ANGLE_LIMIT = 0.02
-STRIKE_SPEED_LIMIT = 1.
+STRIKE_SPEED_LIMIT = .8
+SWING_ENEMY_DISTANCE = 20
 
 
 def log_it(msg, level='info'):
@@ -49,6 +50,8 @@ class MyStrategy:
             log_it('resting state ignore', 'warn')
             return
 
+        # TODO учёт пропажи вратаря в овертайме
+
         puck = world.puck
         my_player = world.get_my_player()
 
@@ -74,8 +77,6 @@ class MyStrategy:
         strike_coord = self.select_strike_coord(me, world)
         log_it("strike coord %s" % str(strike_coord))
 
-        # TODO учёт пропажи вратаря в овертайме
-
         # ведём в голевой сектор центр игрока и шайбы
         puck = world.puck
         unit_center_coord = ((puck.x + me.x) / 2, (puck.y + me.y) / 2)
@@ -95,20 +96,28 @@ class MyStrategy:
                 log_it('speed %.2f - rear turn' % cur_speed)
                 move.speed_up = -1.0
 
-            # todo замахиваемся пока враги далеко (но не более лимита и не менее офсета на замах)
-
+            # todo хуй с ними, с замахами, в овертайме ?
             # поворачиваемся к воротам или лупим по ним
             strike_angle = me.get_angle_to(*strike_coord)
             if abs(strike_angle) <= STRIKE_ANGLE_LIMIT:
                 if me.remaining_cooldown_ticks > 0:
                     log_it('action cooldown %s' % me.remaining_cooldown_ticks)
                 else:
-                    if me.state == HockeyistState.SWINGING:
-                        log_it("strike puck %.2f" % strike_angle)
-                        move.action = ActionType.STRIKE
-                    else:
+                    # todo умный рассчёт близости врага (расстояние делим на длину вектора движения)
+                    limit_ticks = game.swing_action_cooldown_ticks + 1
+                    enemys = [e for e in self.get_enemys(me, world)
+                              if self.get_distance_to(unit_center_coord, (e.x, e.y)) <= SWING_ENEMY_DISTANCE and
+                              e.remaining_cooldown_ticks <= limit_ticks and
+                              e.remaining_knockdown_ticks <= limit_ticks and
+                              (self.unit_in_action_range(e, puck, game) or self.unit_in_action_range(e, me, game))]
+                    danger_mode = len(enemys) > 0
+                    # если враг рядом тогда работаем без замаха
+                    if me.state != HockeyistState.SWINGING and not danger_mode:
                         log_it("swing before strike puck %.2f" % strike_angle)
                         move.action = ActionType.SWING
+                    else:
+                        log_it("strike puck %.2f" % strike_angle)
+                        move.action = ActionType.STRIKE
             else:
                 if me.state == HockeyistState.SWINGING:
                     log_it('cancel swing for turn', 'warn')
