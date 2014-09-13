@@ -1,21 +1,21 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from math import sqrt
+from math import sqrt, hypot
 import logging
 from random import choice
 
 from model.HockeyistState import HockeyistState
 from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
-from model.Unit import Unit
 
 
-GOAL_SECTOR_PADDING_Y = 80
-DISTANCE_LIMIT_TO_GOAL_SECTOR = 70
+GOAL_SECTOR_PADDING_Y = 90
+DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD = 70
+DISTANCE_LIMIT_TO_GOAL_SECTOR_SOFT = DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD + 20
 NET_COORD_FACTOR_X = 3
-NET_COORD_FACTOR_Y = 15
-STRIKE_ANGLE_LIMIT = 0.01
+NET_COORD_FACTOR_Y = 20
+STRIKE_ANGLE_LIMIT = 0.02
 STRIKE_SPEED_LIMIT = 1.
 
 
@@ -75,17 +75,22 @@ class MyStrategy:
         log_it("strike coord %s" % str(strike_coord))
 
         # TODO учёт пропажи вратаря в овертайме
-        # todo начинаем поворачиваться раньше, чем достигли голевого сектора
 
         # ведём в голевой сектор центр игрока и шайбы
         puck = world.puck
         unit_center_coord = ((puck.x + me.x) / 2, (puck.y + me.y) / 2)
-        if self.get_distance_to(unit_center_coord, sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
+
+        distance_limit = DISTANCE_LIMIT_TO_GOAL_SECTOR_HARD
+        if me.state == HockeyistState.SWINGING:
+            # для юнита в замахе делаем постабление дистанции до центра голевого сектора
+            distance_limit = DISTANCE_LIMIT_TO_GOAL_SECTOR_SOFT
+
+        if self.get_distance_to(unit_center_coord, sector_coord) <= distance_limit:
             # если атакер уже может бить - процессим удар по воротам
             log_it('process strike to enemy net')
 
             # оттормаживаемся в голевом секторе
-            cur_speed = self.speed_abs(me)
+            cur_speed = self.get_speed_abs(me)
             if cur_speed > STRIKE_SPEED_LIMIT:
                 log_it('speed %.2f - rear turn' % cur_speed)
                 move.speed_up = -1.0
@@ -95,15 +100,27 @@ class MyStrategy:
             # поворачиваемся к воротам или лупим по ним
             strike_angle = me.get_angle_to(*strike_coord)
             if abs(strike_angle) <= STRIKE_ANGLE_LIMIT:
-                # todo замах перед ударом
-                log_it("strike puck %.2f" % strike_angle)
-                move.action = ActionType.STRIKE
+                if me.remaining_cooldown_ticks > 0:
+                    log_it('action cooldown %s' % me.remaining_cooldown_ticks)
+                else:
+                    if me.state == HockeyistState.SWINGING:
+                        log_it("strike puck %.2f" % strike_angle)
+                        move.action = ActionType.STRIKE
+                    else:
+                        log_it("swing before strike puck %.2f" % strike_angle)
+                        move.action = ActionType.SWING
             else:
+                if me.state == HockeyistState.SWINGING:
+                    log_it('cancel swing for turn', 'warn')
+                    move.action = ActionType.CANCEL_STRIKE
                 log_it("only turn %.2f" % strike_angle)
                 move.turn = strike_angle
         else:
             # иначе ведём атакера на рубеж атаки
             log_it("run and turn to goal sector")
+            if me.state == HockeyistState.SWINGING:
+                log_it('cancel strike (swinging state)')
+                move.action = ActionType.CANCEL_STRIKE
             move.speed_up = 1.0
             move.turn = me.get_angle_to(*sector_coord)
 
@@ -272,10 +289,9 @@ class MyStrategy:
             return top_coord
 
     @staticmethod
-    def speed_abs(unit):
+    def get_speed_abs(unit):
         return sqrt(unit.speed_x ** 2 + unit.speed_y ** 2)
 
     @staticmethod
     def get_distance_to(coord_from, coord_to):
-        u = Unit(0, *coord_from)
-        return u.get_distance_to(*coord_to)
+        return hypot(coord_to[0] - coord_from[0], coord_to[1] - coord_from[1])
