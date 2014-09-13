@@ -8,11 +8,12 @@ from random import choice
 from model.HockeyistState import HockeyistState
 from model.HockeyistType import HockeyistType
 from model.ActionType import ActionType
+from model.Unit import Unit
 
 
-GOAL_SECTOR_PADDING_Y = 0
-DISTANCE_LIMIT_TO_GOAL_SECTOR = 55
-NET_COORD_FACTOR_X = 4
+GOAL_SECTOR_PADDING_Y = 80
+DISTANCE_LIMIT_TO_GOAL_SECTOR = 70
+NET_COORD_FACTOR_X = 3
 NET_COORD_FACTOR_Y = 15
 STRIKE_ANGLE_LIMIT = 0.01
 STRIKE_SPEED_LIMIT = 1.
@@ -74,9 +75,12 @@ class MyStrategy:
         log_it("strike coord %s" % str(strike_coord))
 
         # TODO учёт пропажи вратаря в овертайме
-        # todo ведём в голевой сектор центр игрока и шайбы
         # todo начинаем поворачиваться раньше, чем достигли голевого сектора
-        if me.get_distance_to(*sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
+
+        # ведём в голевой сектор центр игрока и шайбы
+        puck = world.puck
+        unit_center_coord = ((puck.x + me.x) / 2, (puck.y + me.y) / 2)
+        if self.get_distance_to(unit_center_coord, sector_coord) <= DISTANCE_LIMIT_TO_GOAL_SECTOR:
             # если атакер уже может бить - процессим удар по воротам
             log_it('process strike to enemy net')
 
@@ -194,12 +198,11 @@ class MyStrategy:
     def select_goal_sector(me, world, game):
         log_it("select goal sector")
 
-        goalie = [i for i in world.hockeyists if i.type == HockeyistType.GOALIE][0]
         op_player = world.get_opponent_player()
 
         rink_center_x = (game.rink_right + game.rink_left) / 2
         bottom_strike_coord = MyStrategy.get_strike_coord_bottom(world)
-        summary_goalie_r = goalie.radius + world.puck.radius
+        summary_goalie_r = me.radius + world.puck.radius
         net_katet_b = bottom_strike_coord[1] - op_player.net_top
         net_katet_a = 2 * ((summary_goalie_r * (net_katet_b - summary_goalie_r)) /
                            (net_katet_b - 2 * summary_goalie_r))
@@ -271,3 +274,8 @@ class MyStrategy:
     @staticmethod
     def speed_abs(unit):
         return sqrt(unit.speed_x ** 2 + unit.speed_y ** 2)
+
+    @staticmethod
+    def get_distance_to(coord_from, coord_to):
+        u = Unit(0, *coord_from)
+        return u.get_distance_to(*coord_to)
